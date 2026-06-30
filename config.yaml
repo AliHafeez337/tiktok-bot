@@ -35,8 +35,8 @@ automation:
   max_delay: 10
   action_delay: 1
   scroll_delay: 0.5
-  max_users_per_run: 5   # how many followers to process per target account (not how many to extract)
-  max_users_per_session: 20  # total followers to process across ALL targets while logged in (one Chrome profile); bot stops when reached
+  max_users_per_run: 5   # successful comments per target account (failed comments don't count; bot keeps trying)
+  max_users_per_session: 20  # successful comments across ALL targets while logged in; bot stops when reached
   max_likes: 3
   posts_to_check: 5
   headless: false

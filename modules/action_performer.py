@@ -162,6 +162,32 @@ def _post_id_from_url(href):
     return int(match.group(1)) if match else None
 
 
+def _current_page_post_id(driver):
+    """Read the post ID from the browser's current URL."""
+    return _post_id_from_url(driver.current_url)
+
+
+def _wait_for_correct_post_page(driver, post_url, timeout=25):
+    """Wait until the browser has loaded the exact post from post_url."""
+    expected_id = _post_id_from_url(post_url)
+    if not expected_id:
+        return False
+
+    expected_id_str = str(expected_id)
+    end = time.time() + timeout
+    while time.time() < end:
+        current_id = _current_page_post_id(driver)
+        if current_id == expected_id and _wait_for_video_page(driver, timeout=3):
+            return True
+        random_delay(0.5, 0.8)
+
+    logger.warning(
+        f"Page mismatch: expected post {expected_id_str}, "
+        f"got URL {driver.current_url}"
+    )
+    return False
+
+
 def _normalize_post_url(href, username):
     """Normalize a profile post URL and ensure it belongs to the target user."""
     if not href:
@@ -492,13 +518,18 @@ def _is_post_liked(like_button):
 def like_post(driver, post_url):
     """Like a post."""
     try:
+        expected_id = _post_id_from_url(post_url)
         logger.info(f"Liking post: {post_url}")
+
         driver.get(post_url)
         random_delay(2, 3)
         dismiss_popups(driver)
 
-        if not _wait_for_video_page(driver, timeout=25):
-            logger.warning("Video page did not finish loading before like attempt")
+        if not _wait_for_correct_post_page(driver, post_url, timeout=25):
+            logger.warning(
+                f"Wrong or unfinished page before like attempt "
+                f"(wanted post {expected_id}, URL={driver.current_url})"
+            )
             return False
 
         like_button = _find_like_button(driver)
@@ -511,19 +542,31 @@ def like_post(driver, post_url):
             return False
 
         if _is_post_liked(like_button):
-            logger.info("Already liked this post")
-            return True
-
-        if safe_click(driver, like_button):
-            random_delay(0.5, 1)
-            refreshed = _find_like_button(driver)
-            if refreshed and _is_post_liked(refreshed):
-                logger.info("Post liked")
+            if _current_page_post_id(driver) == expected_id:
+                logger.info("Already liked this post")
                 return True
-            logger.info("Like clicked (verification inconclusive)")
+            logger.warning("Like button shows liked, but page post ID does not match target")
+            return False
+
+        if not safe_click(driver, like_button):
+            logger.warning("Could not click like button")
+            return False
+
+        random_delay(0.8, 1.2)
+
+        if _current_page_post_id(driver) != expected_id:
+            logger.warning(
+                f"Page changed after like click "
+                f"(wanted {expected_id}, now {driver.current_url})"
+            )
+            return False
+
+        refreshed = _find_like_button(driver)
+        if refreshed and _is_post_liked(refreshed):
+            logger.info(f"Post liked (verified on post {expected_id})")
             return True
 
-        logger.warning("Could not click like button")
+        logger.warning(f"Like click did not register for post {expected_id}")
         return False
 
     except Exception as e:
@@ -582,7 +625,7 @@ def process_user(driver, username, comments, config):
         posts = get_latest_posts(driver, username, max_likes)
         if not posts:
             logger.warning(f"No posts found for @{username}")
-            return {'success': False, 'reason': 'No posts'}
+            return {'success': False, 'comment_success': False, 'reason': 'No posts'}
 
         comment_text = (
             random.choice(comments)
@@ -601,13 +644,14 @@ def process_user(driver, username, comments, config):
 
         likes_count = min(len(posts), max_likes)
         likes_success = 0
-        logger.info(f"Step 2/3: Liking first {likes_count} profile posts for @{username}")
+        logger.info(f"Step 2/3: Liking profile posts #1-#{likes_count} for @{username}")
         for i in range(likes_count):
+            logger.info(f"Liking profile post #{i + 1}: {posts[i]}")
             if like_post(driver, posts[i]):
                 likes_success += 1
             else:
                 logger.warning(f"Failed to like profile post #{i + 1}: {posts[i]}")
-            random_delay(1, 2)
+            random_delay(2, 3)
 
         logger.info(f"Step 3/3: Following @{username}")
         follow_success = follow_user(driver, username)
@@ -624,6 +668,7 @@ def process_user(driver, username, comments, config):
         return {
             'success': success,
             'username': username,
+            'comment_success': comment_success,
             'comment_used': comment_text if comment_success else None,
             'likes_done': likes_success,
             'followed': follow_success,
@@ -635,4 +680,4 @@ def process_user(driver, username, comments, config):
 
     except Exception as e:
         logger.error(f"Error processing @{username}: {e}")
-        return {'success': False, 'reason': str(e)}
+        return {'success': False, 'comment_success': False, 'reason': str(e)}

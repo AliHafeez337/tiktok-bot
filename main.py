@@ -184,34 +184,36 @@ def process_profile(
         logger.info("✅ No followers left to process for this profile!")
         return progress, True, 0, False
 
-    max_users = config['automation']['max_users_per_run']
+    max_comments = config['automation']['max_users_per_run']
     if session_remaining is not None:
-        max_users = min(max_users, session_remaining)
-    batch_size = min(len(users_to_process), max_users)
+        max_comments = min(max_comments, session_remaining)
     logger.info(
-        f"⚙️ Processing {batch_size} of {len(users_to_process)} remaining followers "
+        f"⚙️ Target: up to {max_comments} successful comments from "
+        f"{len(users_to_process)} remaining followers "
         f"(max_users_per_run={config['automation']['max_users_per_run']}"
-        f"{f', session remaining={session_remaining}' if session_remaining is not None else ''})"
+        f"{f', session comment slots remaining={session_remaining}' if session_remaining is not None else ''})"
     )
-    users_to_process = users_to_process[:max_users]
 
-    users_attempted = 0
-    
-    # Process each user
+    comments_succeeded = 0
+
+    # Keep trying followers until comment quota is met or queue is exhausted
     for index, username in enumerate(users_to_process, 1):
         logger.info(f"\n{'='*50}")
-        logger.info(f"Processing {index}/{len(users_to_process)}: @{username}")
+        logger.info(
+            f"Attempt {index}/{len(users_to_process)}: @{username} "
+            f"(comments {comments_succeeded}/{max_comments})"
+        )
         logger.info(f"{'='*50}")
-        
+
         # Check daily limit
         if progress['actions_today'] >= config['safety']['max_daily_actions']:
             logger.warning("⚠️ Daily action limit reached. Stopping.")
             break
-        
+
         # Process user
         result = process_user(driver, username, comments, config)
-        users_attempted += 1
-        
+        comment_ok = result.get('comment_success', result.get('comment_used') is not None)
+
         # Save result
         if result['success']:
             progress['processed_users'].append({
@@ -230,10 +232,15 @@ def process_profile(
                 'reason': result.get('reason', 'Unknown error'),
                 'timestamp': get_timestamp()
             })
-        
+
+        if comment_ok:
+            comments_succeeded += 1
+            if session_remaining is not None:
+                session_remaining -= 1
+
         # Save progress after each user
         save_progress(progress)
-        
+
         # Random delay between users
         delay = random.uniform(
             config['automation']['min_delay'],
@@ -242,16 +249,20 @@ def process_profile(
         logger.info(f"⏳ Waiting {delay:.1f} seconds before next user...")
         time.sleep(delay)
 
-        if session_remaining is not None:
-            session_remaining -= 1
-            if session_remaining <= 0:
-                logger.info(
-                    "🛑 Session profile limit reached (max_users_per_session). Stopping bot."
-                )
-                break
-    
+        if comments_succeeded >= max_comments:
+            logger.info(
+                f"✅ Per-target comment limit reached ({max_comments}). Moving on."
+            )
+            break
+
+        if session_remaining is not None and session_remaining <= 0:
+            logger.info(
+                "🛑 Session comment limit reached (max_users_per_session). Stopping bot."
+            )
+            break
+
     session_limit_hit = session_remaining is not None and session_remaining <= 0
-    return progress, True, users_attempted, session_limit_hit
+    return progress, True, comments_succeeded, session_limit_hit
 
 def main():
     # Setup
@@ -305,18 +316,18 @@ def main():
             return
 
         session_max = config['automation'].get('max_users_per_session')
-        session_processed = 0
+        session_comments = 0
         if session_max is not None:
             logger.info(
-                f"⚙️ Session limit: {session_max} users across all targets "
+                f"⚙️ Session limit: {session_max} successful comments across all targets "
                 f"(max_users_per_session in config.yaml)"
             )
 
         session_limit_hit = False
         for current_target in targets:
-            if session_max is not None and session_processed >= session_max:
+            if session_max is not None and session_comments >= session_max:
                 logger.info(
-                    f"🛑 Session limit reached ({session_max} users). Stopping bot."
+                    f"🛑 Session limit reached ({session_max} successful comments). Stopping bot."
                 )
                 break
             saved_progress = load_progress()
@@ -331,13 +342,13 @@ def main():
 
             session_remaining = None
             if session_max is not None:
-                session_remaining = session_max - session_processed
+                session_remaining = session_max - session_comments
 
-            progress, completed, users_attempted, session_limit_hit = process_profile(
+            progress, completed, comments_succeeded, session_limit_hit = process_profile(
                 driver, current_target, config, comments, progress, max_scrolls,
                 session_remaining=session_remaining,
             )
-            session_processed += users_attempted
+            session_comments += comments_succeeded
 
             if not completed:
                 logger.warning(f"⚠️ Skipping @{current_target} and moving to next target")
@@ -357,9 +368,9 @@ def main():
         logger.info("=" * 50)
         if progress:
             logger.info(f"Last target processed: @{progress.get('target_profile', 'none')}")
-            logger.info(f"Total users scanned this session: {session_processed}")
+            logger.info(f"Successful comments this session: {session_comments}")
             if session_max is not None:
-                logger.info(f"Session limit: {session_max}")
+                logger.info(f"Session comment limit: {session_max}")
             logger.info(f"Failed: {len(progress['failed_users'])}")
             logger.info(f"Actions today: {progress['actions_today']}")
         logger.info("=" * 50)
