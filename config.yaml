@@ -1,0 +1,54 @@
+# TikTok Account Credentials
+account:
+  email: "your_test_email@gmail.com"
+  password: "your_test_password"
+
+# Target Profile
+target:
+  username: "tiktok"
+  dynamic_target_file: "target.txt"
+  check_interval: 10
+  process_all: true        # process every username listed in target.txt
+  max_follower_scrolls: 15 # stop scrolling early if nothing new is found
+
+# Login Settings
+login:
+  mode: "manual"  # MANUAL mode - you login yourself
+  persist_session: true              # reuse Chrome profile between runs
+  profile_directory: "sessions/chrome"
+  poll_interval: 3   # seconds between login checks
+  max_wait: 180      # max seconds to wait for you to login
+  extra_wait: 30     # extra seconds if you type "wait" at the prompt
+
+# Automation Settings - TESTING MODE
+automation:
+  # Which followers to interact with:
+  #   all - every extracted follower (comment, like 3 posts, follow)
+  #   not_followed_by_bot - skip followers the bot already follows
+  #   not_followed_by_target - skip followers the target profile already follows back
+  follower_filter: all
+  min_delay: 5
+  max_delay: 10
+  action_delay: 1
+  scroll_delay: 0.5
+  max_users_per_run: 2
+  max_likes: 3
+  posts_to_check: 5
+  headless: false
+  browser: "chrome"  # CHANGED to chrome
+
+# Safety Settings
+safety:
+  max_daily_actions: 20
+  blacklist_words: ["illegal", "violence"]
+  skip_profiles: ["user1", "user2"]
+
+# Messages
+messages:
+  comments_file: "input/comments.txt"
+  use_random_comment: true
+
+# Storage
+storage:
+  data_directory: "data"
+  log_level: "INFO"
