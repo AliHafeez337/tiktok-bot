@@ -1,3 +1,5 @@
+import argparse
+import re
 import sys
 import yaml
 import os
@@ -14,13 +16,93 @@ from modules.follower_extractor import (
     get_users_to_process,
 )
 from modules.action_performer import process_user
-from modules.data_manager import load_progress, save_progress, load_comments
+from modules.data_manager import load_progress, save_progress, load_comments, set_profile
 from modules.utils import (
     setup_logging, random_delay, get_timestamp,
     get_target_from_file, get_all_targets_from_file, check_target_change
 )
 
-logger = setup_logging()
+PROFILE_NAME_RE = re.compile(r'^[a-zA-Z0-9_-]+$')
+
+
+def parse_args():
+    parser = argparse.ArgumentParser(
+        description='TikTok Automation Bot',
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""
+Examples:
+  python main.py                    # default profile (sessions/chrome)
+  python main.py --profile account1 # separate Chrome window + saved login
+  python main.py -p account2        # run a second instance in another terminal
+  python main.py --list-profiles    # show available profiles
+
+Each --profile gets its own Chrome user-data folder under sessions/.
+Log in once per profile; the session is reused on later runs.
+        """.strip(),
+    )
+    parser.add_argument(
+        '-p', '--profile',
+        metavar='NAME',
+        help='Chrome session profile name (opens sessions/NAME with saved login)',
+    )
+    parser.add_argument(
+        '--list-profiles',
+        action='store_true',
+        help='List available session profiles and exit',
+    )
+    return parser.parse_args()
+
+
+def validate_profile_name(profile_name):
+    if not PROFILE_NAME_RE.match(profile_name):
+        print(
+            "Invalid profile name. Use letters, numbers, underscores, or hyphens only "
+            f"(got: {profile_name!r}).",
+            file=sys.stderr,
+        )
+        sys.exit(1)
+
+
+def list_profiles():
+    sessions_dir = 'sessions'
+    if not os.path.isdir(sessions_dir):
+        print("No sessions/ directory yet. Run the bot once to create one.")
+        return
+
+    profiles = sorted(
+        name for name in os.listdir(sessions_dir)
+        if os.path.isdir(os.path.join(sessions_dir, name))
+    )
+    if not profiles:
+        print("No profiles found under sessions/.")
+        print("Create one by running: python main.py --profile account1")
+        return
+
+    print("Available Chrome session profiles:")
+    for name in profiles:
+        marker = " (default)" if name == 'chrome' else ""
+        print(f"  - {name}{marker}")
+    print("\nRun: python main.py --profile <name>")
+
+
+def apply_profile(config, profile_name):
+    """Point config at an isolated Chrome user-data directory."""
+    if profile_name:
+        config['login']['profile_directory'] = os.path.join('sessions', profile_name)
+    return config
+
+
+CLI_ARGS = parse_args()
+
+if CLI_ARGS.list_profiles:
+    list_profiles()
+    sys.exit(0)
+
+if CLI_ARGS.profile:
+    validate_profile_name(CLI_ARGS.profile)
+
+set_profile(CLI_ARGS.profile)
+logger = setup_logging(profile=CLI_ARGS.profile)
 
 
 def create_progress(target_username, actions_today=0):
@@ -36,7 +118,10 @@ def create_progress(target_username, actions_today=0):
     }
 
 
-def process_profile(driver, target_username, config, comments, progress, max_scrolls=15):
+def process_profile(
+    driver, target_username, config, comments, progress, max_scrolls=15,
+    session_remaining=None,
+):
     """Process a single profile - extract followers and process users"""
     logger.info(f"\n{'='*50}")
     logger.info(f"📊 Processing profile: @{target_username}")
@@ -70,7 +155,7 @@ def process_profile(driver, target_username, config, comments, progress, max_scr
 
     if not followers:
         logger.error(f"❌ Could not extract followers from @{target_username}")
-        return progress, False
+        return progress, False, 0, False
 
     progress['total_found'] = len(followers)
 
@@ -88,14 +173,24 @@ def process_profile(driver, target_username, config, comments, progress, max_scr
         if u not in skip_profiles and u not in processed_users
     ]
 
-    logger.info(f"📋 Found {len(users_to_process)} followers to process")
+    logger.info(f"📋 Found {len(users_queue)} followers total, {len(users_to_process)} ready to process")
 
     if not users_to_process:
         logger.info("✅ No followers left to process for this profile!")
-        return progress, True
+        return progress, True, 0, False
 
     max_users = config['automation']['max_users_per_run']
+    if session_remaining is not None:
+        max_users = min(max_users, session_remaining)
+    batch_size = min(len(users_to_process), max_users)
+    logger.info(
+        f"⚙️ Processing {batch_size} of {len(users_to_process)} remaining followers "
+        f"(max_users_per_run={config['automation']['max_users_per_run']}"
+        f"{f', session remaining={session_remaining}' if session_remaining is not None else ''})"
+    )
     users_to_process = users_to_process[:max_users]
+
+    users_attempted = 0
     
     # Process each user
     for index, username in enumerate(users_to_process, 1):
@@ -110,6 +205,7 @@ def process_profile(driver, target_username, config, comments, progress, max_scr
         
         # Process user
         result = process_user(driver, username, comments, config)
+        users_attempted += 1
         
         # Save result
         if result['success']:
@@ -140,26 +236,42 @@ def process_profile(driver, target_username, config, comments, progress, max_scr
         )
         logger.info(f"⏳ Waiting {delay:.1f} seconds before next user...")
         time.sleep(delay)
+
+        if session_remaining is not None:
+            session_remaining -= 1
+            if session_remaining <= 0:
+                logger.info(
+                    "🛑 Session profile limit reached (max_users_per_session). Stopping bot."
+                )
+                break
     
-    return progress, True
+    session_limit_hit = session_remaining is not None and session_remaining <= 0
+    return progress, True, users_attempted, session_limit_hit
 
 def main():
     # Setup
+    profile_label = CLI_ARGS.profile or 'default (sessions/chrome)'
     logger.info("=" * 50)
     logger.info("🚀 TikTok Automation Bot Starting")
+    logger.info(f"🧑 Chrome profile: {profile_label}")
     logger.info("=" * 50)
     
     # Load config
     logger.info("Loading configuration...")
     config = load_config()
+    config = apply_profile(config, CLI_ARGS.profile)
     
     # Create necessary directories
     os.makedirs('data/logs', exist_ok=True)
-    os.makedirs('sessions', exist_ok=True)
+    os.makedirs(config['login'].get('profile_directory', 'sessions/chrome'), exist_ok=True)
     
     # Initialize driver
     logger.info("Initializing browser...")
-    driver = get_driver(config)
+    try:
+        driver = get_driver(config)
+    except RuntimeError as e:
+        logger.error(str(e))
+        return
     progress = None
 
     try:
@@ -183,7 +295,21 @@ def main():
             logger.error("❌ No comments found! Add comments to input/comments.txt")
             return
 
+        session_max = config['automation'].get('max_users_per_session')
+        session_processed = 0
+        if session_max is not None:
+            logger.info(
+                f"⚙️ Session limit: {session_max} users across all targets "
+                f"(max_users_per_session in config.yaml)"
+            )
+
+        session_limit_hit = False
         for current_target in targets:
+            if session_max is not None and session_processed >= session_max:
+                logger.info(
+                    f"🛑 Session limit reached ({session_max} users). Stopping bot."
+                )
+                break
             saved_progress = load_progress()
             if saved_progress and saved_progress.get('target_profile') == current_target:
                 progress = saved_progress
@@ -194,15 +320,24 @@ def main():
                 progress = create_progress(current_target, actions_today)
                 logger.info(f"📝 Starting fresh for @{current_target}")
 
-            progress, completed = process_profile(
-                driver, current_target, config, comments, progress, max_scrolls
+            session_remaining = None
+            if session_max is not None:
+                session_remaining = session_max - session_processed
+
+            progress, completed, users_attempted, session_limit_hit = process_profile(
+                driver, current_target, config, comments, progress, max_scrolls,
+                session_remaining=session_remaining,
             )
+            session_processed += users_attempted
 
             if not completed:
                 logger.warning(f"⚠️ Skipping @{current_target} and moving to next target")
                 continue
 
             logger.info(f"✅ Finished processing @{current_target}")
+
+            if session_limit_hit:
+                break
 
             if progress['actions_today'] >= config['safety']['max_daily_actions']:
                 logger.warning("⚠️ Daily action limit reached. Stopping.")
@@ -213,7 +348,9 @@ def main():
         logger.info("=" * 50)
         if progress:
             logger.info(f"Last target processed: @{progress.get('target_profile', 'none')}")
-            logger.info(f"Total processed this session: {progress['processed_count']}")
+            logger.info(f"Total users scanned this session: {session_processed}")
+            if session_max is not None:
+                logger.info(f"Session limit: {session_max}")
             logger.info(f"Failed: {len(progress['failed_users'])}")
             logger.info(f"Actions today: {progress['actions_today']}")
         logger.info("=" * 50)

@@ -8,11 +8,13 @@ def random_delay(min_sec, max_sec):
     delay = random.uniform(min_sec, max_sec)
     time.sleep(delay)
 
-def setup_logging(level='INFO'):
+def setup_logging(level='INFO', profile=None):
     """Configure logging - SIMPLIFIED VERSION"""
     import os
     os.makedirs('data/logs', exist_ok=True)
-    
+
+    log_name = 'bot.log' if not profile else f'bot_{profile}.log'
+
     # Remove any existing handlers
     for handler in logging.root.handlers[:]:
         logging.root.removeHandler(handler)
@@ -21,7 +23,9 @@ def setup_logging(level='INFO'):
     formatter = logging.Formatter('%(asctime)s - %(levelname)s - %(message)s')
     
     # File handler
-    file_handler = logging.FileHandler('data/logs/bot.log', encoding='utf-8')
+    file_handler = logging.FileHandler(
+        os.path.join('data/logs', log_name), encoding='utf-8'
+    )
     file_handler.setFormatter(formatter)
     
     # Console handler - SIMPLE VERSION

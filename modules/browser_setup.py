@@ -65,7 +65,17 @@ def get_driver(config):
         
         # Initialize driver
         service = ChromeService(ChromeDriverManager().install())
-        driver = webdriver.Chrome(service=service, options=options)
+        try:
+            driver = webdriver.Chrome(service=service, options=options)
+        except Exception as e:
+            profile_dir = login_config.get('profile_directory', 'sessions/chrome')
+            if 'user data directory is already in use' in str(e).lower():
+                raise RuntimeError(
+                    f"Chrome profile already in use: {profile_dir}\n"
+                    "Close the other bot window using this profile, or pick a different "
+                    "--profile name."
+                ) from e
+            raise
         
         # Remove webdriver property to hide automation
         driver.execute_script("Object.defineProperty(navigator, 'webdriver', {get: () => undefined})")

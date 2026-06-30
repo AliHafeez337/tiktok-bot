@@ -15,7 +15,25 @@ import time
 
 logger = setup_logging()
 
+INVALID_USERNAMES = {
+    'login', 'signup', 'explore', 'discover', 'live', 'about', 'legal',
+    'privacy', 'terms', 'support', 'feedback', 'upload', 'setting',
+    'following', 'followers', 'video', 'photo', 'music', 'tag', 'search',
+}
+
+
 USERNAME_PATTERN = re.compile(r'/@([^/?#]+)')
+
+
+def _is_valid_username(name):
+    if not name:
+        return False
+    lowered = name.lower().strip().lstrip('@')
+    if lowered in INVALID_USERNAMES:
+        return False
+    if not re.match(r'^[A-Za-z0-9._-]{2,}$', lowered):
+        return False
+    return True
 
 
 def _username_from_href(href):
@@ -70,10 +88,11 @@ def _close_modal(driver):
 def _find_profile_stat(driver, stat_e2e):
     """Find the clickable followers/following count on a profile."""
     selectors = [
+        (By.CSS_SELECTOR, f'[data-e2e="{stat_e2e}"]'),
         (By.CSS_SELECTOR, f'strong[data-e2e="{stat_e2e}"]'),
         (By.CSS_SELECTOR, f'[data-e2e="{stat_e2e}"] strong'),
-        (By.CSS_SELECTOR, f'[data-e2e="{stat_e2e}"]'),
         (By.XPATH, f'//strong[@data-e2e="{stat_e2e}"]'),
+        (By.XPATH, f'//*[@data-e2e="{stat_e2e}"]/ancestor::*[self::a or self::button or @role="button"][1]'),
     ]
     for by, value in selectors:
         element = safe_find_clickable(driver, by, value, timeout=8)
@@ -85,24 +104,40 @@ def _find_profile_stat(driver, stat_e2e):
     return None
 
 
-def _wait_for_user_list_modal(driver, timeout=15):
-    """Wait until a followers/following popup is visible."""
-    modal_selectors = [
+def _wait_for_user_list_modal(driver, timeout=20):
+    """Wait until follower/following rows appear in the popup."""
+    item_selectors = [
         (By.CSS_SELECTOR, '[data-e2e="follow-item"]'),
         (By.CSS_SELECTOR, '[role="dialog"] [data-e2e="user-link"]'),
         (By.CSS_SELECTOR, '[role="dialog"] a[href*="/@"]'),
-        (By.CSS_SELECTOR, '[class*="UserListContainer"]'),
-        (By.XPATH, '//div[@role="dialog"]'),
+        (By.CSS_SELECTOR, '[class*="UserItemContainer"] a[href*="/@"]'),
     ]
-    for by, value in modal_selectors:
-        element = safe_find_element(driver, by, value, timeout=timeout)
-        if element:
+    end = time.time() + timeout
+    while time.time() < end:
+        for by, value in item_selectors:
+            elements = driver.find_elements(by, value)
+            if elements:
+                return True
+        random_delay(0.5, 0.8)
+    return False
+
+
+def _wait_for_list_populated(driver, exclude=None, timeout=25):
+    """Wait until at least one username appears in the open modal."""
+    exclude = exclude or set()
+    end = time.time() + timeout
+    while time.time() < end:
+        if _collect_usernames(driver, exclude=exclude):
             return True
+        random_delay(1, 1.5)
     return False
 
 
 def _open_user_list_modal(driver, username, stat_e2e, list_label):
     """Open followers or following popup from the current profile page."""
+    _close_modal(driver)
+    random_delay(0.5, 1)
+
     element = _find_profile_stat(driver, stat_e2e)
     if not element:
         logger.error(f"Could not find {list_label} button for @{username}")
@@ -112,15 +147,18 @@ def _open_user_list_modal(driver, username, stat_e2e, list_label):
         logger.error(f"Could not click {list_label} button for @{username}")
         return False
 
-    random_delay(1, 2)
+    random_delay(1.5, 2.5)
     dismiss_popups(driver)
 
-    if _wait_for_user_list_modal(driver, timeout=15):
-        logger.info(f"Opened {list_label} list for @{username}")
-        return True
+    if not _wait_for_user_list_modal(driver, timeout=20):
+        logger.error(f"Could not open {list_label} list for @{username}")
+        return False
 
-    logger.error(f"Could not open {list_label} list for @{username}")
-    return False
+    if not _wait_for_list_populated(driver, exclude={username}, timeout=25):
+        logger.warning(f"{list_label.capitalize()} modal opened but list still empty for @{username}")
+
+    logger.info(f"Opened {list_label} list for @{username}")
+    return True
 
 
 def _collect_usernames(driver, exclude=None):
@@ -141,7 +179,11 @@ def _collect_usernames(driver, exclude=None):
     link_selectors = [
         '[data-e2e="follow-item"] a[href*="/@"]',
         '[data-e2e="user-link"]',
-        'a[href*="/@"]',
+        '[data-e2e="search-user-container"] a[href*="/@"]',
+        '[class*="UserItemContainer"] a[href*="/@"]',
+        '[class*="UserItem"] a[href*="/@"]',
+        '[role="dialog"] li a[href*="/@"]',
+        '[role="dialog"] a[href*="/@"]',
     ]
 
     search_roots = scopes if scopes else [driver.find_element(By.TAG_NAME, 'body')]
@@ -153,7 +195,13 @@ def _collect_usernames(driver, exclude=None):
                     username = _username_from_href(href)
                     if not username:
                         username = element.text.strip().lstrip('@')
-                    if username and username not in exclude and username not in seen:
+                    username = (username or '').strip().lstrip('@')
+                    if (
+                        username
+                        and _is_valid_username(username)
+                        and username not in exclude
+                        and username not in seen
+                    ):
                         seen.add(username)
                         usernames.append(username)
             except Exception:
@@ -168,6 +216,7 @@ def _scroll_user_list(driver):
         '[data-e2e="follow-list"]',
         '[role="dialog"] [class*="DivUserListContainer"]',
         '[class*="UserListContainer"]',
+        '[role="dialog"] ul',
         '[role="dialog"]',
     ]
 
@@ -175,19 +224,22 @@ def _scroll_user_list(driver):
         for container in driver.find_elements(By.CSS_SELECTOR, selector):
             try:
                 if container.is_displayed():
+                    current = driver.execute_script("return arguments[0].scrollTop;", container)
                     driver.execute_script(
-                        "arguments[0].scrollTop = arguments[0].scrollHeight;",
+                        "arguments[0].scrollTop = arguments[0].scrollTop + arguments[0].clientHeight;",
                         container,
                     )
-                    return True
+                    new_pos = driver.execute_script("return arguments[0].scrollTop;", container)
+                    if new_pos > current:
+                        return True
             except Exception:
                 continue
 
-    driver.execute_script("window.scrollTo(0, document.body.scrollHeight);")
+    driver.execute_script("window.scrollBy(0, 600);")
     return False
 
 
-def _extract_user_list(driver, username, stat_e2e, list_label, max_scrolls=15, no_progress_limit=3):
+def _extract_user_list(driver, username, stat_e2e, list_label, max_scrolls=15, no_progress_limit=6):
     """Extract usernames from an already-open profile page."""
     if not _open_user_list_modal(driver, username, stat_e2e, list_label):
         return []
@@ -209,8 +261,8 @@ def _extract_user_list(driver, username, stat_e2e, list_label, max_scrolls=15, n
             logger.info(f"Found {len(users)} {list_label} so far...")
         else:
             no_progress_streak += 1
-            if scroll_attempts == 0 and not users:
-                logger.warning(f"No {list_label} found yet, retrying scroll...")
+            if scroll_attempts < 3 and not users:
+                logger.warning(f"No {list_label} found yet, waiting for list to load...")
             elif no_progress_streak >= no_progress_limit:
                 logger.warning(
                     f"No new {list_label} after {no_progress_limit} scrolls, stopping early"
@@ -224,11 +276,12 @@ def _extract_user_list(driver, username, stat_e2e, list_label, max_scrolls=15, n
             pass
 
         _scroll_user_list(driver)
-        random_delay(0.5, 1)
+        random_delay(0.8, 1.2)
         scroll_attempts += 1
 
     logger.info(f"Extracted {len(users)} {list_label}")
     _close_modal(driver)
+    random_delay(0.5, 1)
     return users
 
 
@@ -240,6 +293,8 @@ def _extract_lists_from_profile(driver, username, max_scrolls=15):
     followers = _extract_user_list(
         driver, username, "followers-count", "followers", max_scrolls=max_scrolls
     )
+
+    _navigate_to_profile(driver, username)
     following = _extract_user_list(
         driver, username, "following-count", "following", max_scrolls=max_scrolls
     )
