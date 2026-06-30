@@ -35,30 +35,22 @@ We need to make sure the bot works correctly before you start using it. I'll gui
 
 ### Steps:
 1. Open `config.yaml` file
-2. Find these lines:
-   ```yaml
-   account:
-     email: "your_email@gmail.com"
-     password: "your_password"
-   ```
-3. Replace with your TEST ACCOUNT credentials
-4. Save the file
-5. Open Command Prompt/Terminal
-6. Type: `cd Desktop/tiktok_bot` (or wherever your bot is)
-7. Type: `python main.py`
+2. Ensure `login.mode` is set to `"manual"`
+3. Save the file
+4. Open Command Prompt/Terminal
+5. Type: `cd Desktop/tiktok_bot` (or wherever your bot is)
+6. Type: `python main.py`
 
 ### What Should Happen:
-- [ ] A Firefox/Chrome browser opens
+- [ ] A Chrome browser opens
 - [ ] It goes to TikTok login page
-- [ ] It types your email
-- [ ] It types your password
-- [ ] It clicks login
-- [ ] You see "✅ Login successful!" in the terminal
+- [ ] You log in manually in the browser
+- [ ] You see "✅ Already logged in" or login success in the terminal
 
 ### What If It Fails:
-- Check your email and password in config.yaml
 - Try logging in manually in the browser first
 - Make sure TikTok isn't blocking you
+- Delete `sessions/chrome` and log in again
 - Try again
 
 ### Stop the Bot:
@@ -276,6 +268,80 @@ We need to make sure the bot works correctly before you start using it. I'll gui
 
 ---
 
+## TEST 9: SESSION LIMIT TEST
+
+**Goal:** Make sure the bot stops after scanning the session-wide limit across all targets
+
+### Steps:
+1. Add 3+ usernames to `target.txt`
+2. Open `config.yaml` and set:
+   ```yaml
+   max_users_per_run: 30
+   max_users_per_session: 3
+   process_all: true
+   ```
+3. Save and run: `python main.py`
+
+### What Should Happen:
+- [ ] Bot processes followers from the first target(s)
+- [ ] After 3 users are scanned, it says `Session profile limit reached (max_users_per_session). Stopping bot.`
+- [ ] Bot exits without processing remaining targets in `target.txt`
+
+### ✅ Test 9 Passed if:
+- Exactly 3 users were scanned total (check terminal summary)
+- Bot stopped completely (did not continue to next target)
+
+---
+
+## TEST 10: MULTI-PROFILE TEST
+
+**Goal:** Run two bot instances with separate TikTok logins
+
+### Steps:
+1. Open two terminals
+2. Terminal 1: `python main.py --profile account1`
+3. Log in with TikTok account A in the browser
+4. Terminal 2: `python main.py --profile account2`
+5. Log in with TikTok account B in the second browser
+6. Run: `python main.py --list-profiles`
+
+### What Should Happen:
+- [ ] Two separate Chrome windows open
+- [ ] Each keeps its own login after restart
+- [ ] Progress saved separately: `data/progress_account1.json`, `data/progress_account2.json`
+- [ ] `--list-profiles` shows `account1` and `account2`
+
+### ✅ Test 10 Passed if:
+- Both profiles run without sharing login state
+- Each profile has its own progress file
+
+---
+
+## TEST 11: TARGET QUEUE TEST
+
+**Goal:** Process multiple targets from `target.txt`
+
+### Steps:
+1. Add 2 usernames to `target.txt`
+2. Set in `config.yaml`:
+   ```yaml
+   process_all: true
+   max_users_per_run: 2
+   max_users_per_session: 10
+   ```
+3. Run: `python main.py`
+
+### What Should Happen:
+- [ ] Terminal shows `Target queue (2): @user1, @user2`
+- [ ] Bot processes first target, then moves to second (unless session limit hit)
+- [ ] Logs show `Processing profile: @user1` then `@user2`
+
+### ✅ Test 11 Passed if:
+- Both targets are visited in order
+- Limits are respected per target and per session
+
+---
+
 ## TEST 8: ERROR HANDLING TEST
 
 **Goal:** Make sure bot handles errors gracefully
@@ -331,6 +397,15 @@ Notes: _______________
 Test 8 (Error Handling): [PASS/FAIL]
 Notes: _______________
 
+Test 9 (Session Limit): [PASS/FAIL]
+Notes: _______________
+
+Test 10 (Multi-Profile): [PASS/FAIL]
+Notes: _______________
+
+Test 11 (Target Queue): [PASS/FAIL]
+Notes: _______________
+
 OVERALL: [READY TO USE / NEEDS FIXES]
 ```
 
@@ -369,11 +444,13 @@ OVERALL: [READY TO USE / NEEDS FIXES]
    - Open `config.yaml`
    - Change email/password to your REAL account
 
-2. **Set your target:**
-   - Change `username` to the profile you want
+2. **Set your targets:**
+   - Add usernames to `target.txt` (one per line)
+   - Set `process_all: true` in config.yaml
 
 3. **Adjust settings:**
-   - Set `max_users_per_run: 50` (or however many)
+   - Set `max_users_per_run: 50` (per target)
+   - Set `max_users_per_session: 100` (total per login)
    - Set `min_delay: 60` (for safety)
    - Set `max_delay: 120` (for safety)
 
@@ -386,11 +463,39 @@ OVERALL: [READY TO USE / NEEDS FIXES]
 
 ---
 
+## TEST 9: MULTI-PROFILE (OPTIONAL)
+
+**Goal:** Run two bot instances with different TikTok accounts in separate Chrome windows.
+
+### Steps:
+1. Open **Terminal 1**
+2. Run: `python main.py --profile test1`
+3. Log in to TikTok account #1 when prompted
+4. Stop the bot with `Ctrl + C` after login succeeds (or let it run)
+5. Open **Terminal 2**
+6. Run: `python main.py --profile test2`
+7. Log in to TikTok account #2 when prompted
+
+### What Should Happen:
+- [ ] Two separate Chrome windows open (not the same session)
+- [ ] Each window stays logged in to a different account
+- [ ] `sessions/test1/` and `sessions/test2/` folders are created
+- [ ] `data/progress_test1.json` and `data/progress_test2.json` are separate
+- [ ] Running `python main.py --list-profiles` shows `test1` and `test2`
+
+### What If It Fails:
+- **"Chrome profile already in use"** — you started the same `--profile` twice; close one terminal or use a different name
+- **Same account in both windows** — you used the same profile name or logged into the same account manually
+
+---
+
 ## QUICK REFERENCE
 
 ### Start Bot:
 ```
 python main.py
+python main.py --profile account1
+python main.py --list-profiles
 ```
 
 ### Stop Bot:
@@ -401,16 +506,19 @@ Ctrl + C
 ### Start Fresh (Delete Progress):
 ```
 delete data/progress.json
+delete data/progress_account1.json
 ```
 
 ### Check Logs:
 ```
 open data/logs/bot.log
+open data/logs/bot_account1.log
 ```
 
 ### Check Progress:
 ```
 open data/progress.json
+open data/progress_account1.json
 ```
 
 ---

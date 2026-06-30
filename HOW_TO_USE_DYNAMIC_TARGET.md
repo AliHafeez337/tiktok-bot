@@ -14,6 +14,13 @@ charlidamelio
 python main.py
 ```
 
+For multiple TikTok accounts in parallel, use a different Chrome profile per terminal:
+```bash
+python main.py --profile account1
+python main.py --profile account2
+```
+See [README.md](README.md) for full CLI options.
+
 ### 3. Change target while running
 Open `target.txt`, change to:
 ```

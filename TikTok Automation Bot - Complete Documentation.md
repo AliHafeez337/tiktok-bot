@@ -3,14 +3,15 @@
 ## 1. PROJECT UNDERSTANDING
 
 ### What the Bot Does:
-- **Login** to TikTok web version
-- **Extract** followers from a given profile
-- **Filter** to find users the bot's account doesn't follow back
-- **Interact** with each non-following user:
+- **Login** to TikTok web version (manual login supported — you sign in in the browser)
+- **Extract** followers from one or more target profiles (`target.txt`)
+- **Filter** followers by mode (`all`, `not_followed_by_bot`, `not_followed_by_target`)
+- **Interact** with each selected follower:
   - Comment on their latest post
-  - Like their 3 most recent posts
+  - Like up to 3 most recent posts
   - Follow the user
-- **Repeat** until all non-followers are processed
+- **Respect limits** — per-target, per-session, and daily caps stop the bot automatically
+- **Support multiple Chrome profiles** — run separate bot instances for different TikTok accounts in parallel
 
 ### Important Considerations:
 - **Legal/Ethical**: TikTok's Terms of Service prohibit automation
@@ -149,28 +150,34 @@ START
 tiktok_bot/
 │
 ├── config.yaml                 # All user settings
-├── main.py                     # Entry point
+├── target.txt                  # Target usernames (one per line)
+├── main.py                     # Entry point (supports --profile CLI)
 │
 ├── modules/
 │   ├── __init__.py
 │   ├── login.py               # Handles TikTok login
+│   ├── login_manual.py        # Manual login flow
 │   ├── browser_setup.py       # Browser initialization
 │   ├── follower_extractor.py  # Gets followers/following
 │   ├── action_performer.py    # Comment, like, follow
-│   ├── data_manager.py        # Save/load progress
+│   ├── data_manager.py        # Save/load progress (per profile)
 │   └── utils.py               # Helper functions
 │
 ├── data/
-│   ├── progress.json          # Current progress
-│   ├── processed_users.json   # Already processed
-│   ├── logs/
-│   │   └── bot.log            # Activity log
-│   └── sessions/
-│       └── session.pkl        # Browser session
+│   ├── progress.json          # Progress for default profile
+│   ├── progress_<name>.json   # Progress when using --profile <name>
+│   └── logs/
+│       ├── bot.log            # Default profile log
+│       └── bot_<name>.log     # Log when using --profile <name>
+│
+├── sessions/
+│   ├── chrome/                # Default Chrome user-data (saved login)
+│   └── <profile_name>/        # One folder per --profile name
 │
 ├── input/
 │   └── comments.txt           # List of comments to use
 │
+├── setup.bat / setup.sh       # One-step setup scripts
 └── requirements.txt           # Python dependencies
 ```
 
@@ -179,62 +186,119 @@ tiktok_bot/
 ## 6. CONFIGURATION FILE (config.yaml)
 
 ```yaml
-# TikTok Account Credentials
+# TikTok Account Credentials (used for automated login; manual mode ignores these)
 account:
   email: "your_email@gmail.com"
   password: "your_password"
-  # OR use mobile number
-  # phone: "+1234567890"
 
 # Target Profile
 target:
-  username: "target_username"  # Profile to analyze
+  username: "tiktok"              # Fallback if target.txt is empty
+  dynamic_target_file: "target.txt" # File with usernames to process
+  process_all: true                 # Process every username in target.txt
+  max_follower_scrolls: 15          # Stop scrolling if no new followers found
+
+# Login Settings
+login:
+  mode: "manual"                    # "manual" — you log in in the browser
+  persist_session: true             # Reuse Chrome profile between runs
+  profile_directory: "sessions/chrome"  # Overridden by --profile NAME
+  poll_interval: 3                  # Seconds between login checks
+  max_wait: 180                     # Max seconds to wait for login
+  extra_wait: 30                    # Extra time if you type "wait" at prompt
 
 # Automation Settings
 automation:
-  # Time delays (in seconds)
-  min_delay: 30          # Minimum delay between users
-  max_delay: 60          # Maximum delay between users
-  action_delay: 3        # Delay between actions on same profile
-  scroll_delay: 2        # Delay when scrolling
-  
-  # Limits
-  max_users_per_run: 50  # Process X users per session
-  max_likes: 3           # Number of posts to like
-  posts_to_check: 5      # Check latest X posts for comment
-  
-  # Browser
-  headless: false        # Set true to run without UI
-  browser: "firefox"     # "firefox" or "chrome"
+  follower_filter: all              # all | not_followed_by_bot | not_followed_by_target
+  min_delay: 5                      # Min seconds between users
+  max_delay: 10                     # Max seconds between users
+  action_delay: 1                   # Delay between actions on same profile
+  scroll_delay: 0.5                 # Delay when scrolling follower lists
+  max_users_per_run: 5              # Max followers to process per target account
+  max_users_per_session: 20         # Max followers to scan across ALL targets while logged in
+  max_likes: 3                      # Posts to like per user
+  posts_to_check: 5                 # Latest posts checked for commenting
+  headless: false
+  browser: "chrome"                 # "chrome" or "firefox"
 
 # Safety Settings
 safety:
-  max_daily_actions: 300 # Stop after X actions total
-  blacklist_words: [     # Skip commenting these words
-    "illegal",
-    "violence"
-  ]
-  skip_profiles: [       # Skip specific profiles
-    "user1",
-    "user2"
-  ]
+  max_daily_actions: 100
+  blacklist_words: ["illegal", "violence"]
+  skip_profiles: ["user1", "user2"]
 
 # Messages
 messages:
-  comments_file: "input/comments.txt"  # File with comments
-  use_random_comment: true             # Pick random or sequential
+  comments_file: "input/comments.txt"
+  use_random_comment: true
 
 # Storage
 storage:
   data_directory: "data"
-  log_level: "INFO"    # DEBUG, INFO, WARNING, ERROR
+  log_level: "INFO"
 ```
+
+### Processing limits (how they work together)
+
+| Setting | Scope | Example |
+|---------|--------|---------|
+| `max_users_per_run` | One target username in `target.txt` | Process up to 5 followers from `@brandA` |
+| `max_users_per_session` | Entire run while logged in (one Chrome profile) | Stop after 20 followers total across all targets |
+| `max_daily_actions` | Calendar day (tracked in progress file) | Stop after 100 comments/likes/follows combined |
+
+If you have 3 targets in `target.txt` and each has 100 followers, setting `max_users_per_session: 20` means the bot scans 20 profiles and **stops completely** — it will not move on to process all followers from every target.
+
+### target.txt
+
+One username per line (no `@`):
+
+```
+guiltyxapparel
+brandymelvilleusa
+lift_the_label
+```
+
+With `process_all: true`, the bot processes targets in file order until limits are hit.
+
+### Follower filter modes
+
+| Mode | Behavior |
+|------|----------|
+| `all` | Process every extracted follower |
+| `not_followed_by_bot` | Skip followers your logged-in account already follows |
+| `not_followed_by_target` | Skip followers the target profile already follows back |
+
+### Multi-profile CLI
+
+Run separate bot instances for different TikTok accounts:
+
+```bash
+python main.py                      # default: sessions/chrome
+python main.py --profile account1   # sessions/account1
+python main.py --profile account2   # sessions/account2
+python main.py --list-profiles      # list saved profiles
+```
+
+Each profile gets:
+- Its own Chrome user-data folder under `sessions/<name>/`
+- Its own progress file: `data/progress_<name>.json` (default uses `data/progress.json`)
+- Its own log file: `data/logs/bot_<name>.log` (default uses `data/logs/bot.log`)
+
+Log in once per profile in the browser; subsequent runs reuse the saved session.
+
+**Rules:**
+- Use a **different** `--profile` name in each terminal when running bots in parallel.
+- Do **not** start two bots with the same profile at once — Chrome locks the profile folder and the second instance will fail.
+- Profile names: letters, numbers, underscores, hyphens only (e.g. `account1`, `ali_main`).
 
 ---
 
 ## 7. DATA FILES
 
-### progress.json
+### progress.json (and per-profile variants)
+
+Default run writes `data/progress.json`. With `--profile account1`, progress is saved to `data/progress_account1.json` so parallel bots do not overwrite each other.
+
 ```json
 {
   "started_at": "2026-01-15 10:30:00",
@@ -396,9 +460,10 @@ Error Occurs
 
 #### Step 5: Configure
 1. Open `config.yaml` in Notepad
-2. Fill in your TikTok email and password
-3. Put target username
-4. Save the file
+2. Set `login.mode` to `"manual"` (recommended — you log in yourself in the browser)
+3. Add target usernames to `target.txt` (one per line)
+4. Set `max_users_per_run` and `max_users_per_session` to small numbers for testing
+5. Save the files
 
 #### Step 6: Add Comments
 1. Open `comments.txt`
@@ -409,7 +474,10 @@ Error Occurs
 1. Open Command Prompt/Terminal
 2. Type: `cd Desktop/tiktok_bot`
 3. Type: `python main.py`
-4. Watch it work!
+4. Log in manually in the Chrome window when prompted
+5. Watch it work!
+
+**Multiple TikTok accounts:** open a second terminal and run `python main.py --profile account2`. Each profile keeps its own login and progress.
 
 #### Step 8: Stop the Bot
 - Press `Ctrl + C` on keyboard
@@ -495,9 +563,11 @@ Sleep between users: 30-60 seconds
 ```
 Backup these files:
 - config.yaml (your settings)
-- progress.json (progress)
-- data/ folder (all data)
+- data/progress.json and data/progress_*.json (progress per profile)
+- data/logs/ (activity logs)
+- sessions/ (saved Chrome logins — do not share publicly)
 - input/ folder (your comments)
+- target.txt
 ```
 
 ### Update Process:
@@ -517,6 +587,7 @@ Backup these files:
 | "Bot is too slow" | Reduce delays slightly |
 | "Missing elements" | Update browser/driver |
 | "Can't find profile" | Check username spelling |
+| "Chrome profile already in use" | Close the other bot using that `--profile`, or pick a different profile name |
 | "Action got stuck" | Increase wait times |
 | "Banned/Temp locked" | Stop bot, wait, reduce speed |
 
@@ -533,11 +604,10 @@ Backup these files:
 
 ### Planned Updates:
 1. **Proxy support** - Use different IPs
-2. **Multiple accounts** - Manage several profiles
-3. **AI comments** - Generate smart comments
-4. **GUI interface** - Visual dashboard
-5. **Email reports** - Daily summaries
-6. **Cloud hosting** - Run 24/7
+2. **AI comments** - Generate smart comments
+3. **GUI interface** - Visual dashboard
+4. **Email reports** - Daily summaries
+5. **Cloud hosting** - Run 24/7
 
 ### Version History:
 - **v1.0**: Basic functionality
@@ -545,6 +615,9 @@ Backup these files:
 - **v1.2**: Better error handling
 - **v1.3**: Session persistence
 - **v1.4**: Performance improvements
+- **v1.5**: Manual login, `target.txt` multi-target queue, follower filter modes
+- **v1.6**: `--profile` CLI for parallel Chrome sessions, per-profile progress files
+- **v1.7**: `max_users_per_session` — cap total scans across all targets per login
 
 ---
 
@@ -680,4 +753,4 @@ comment = random.choice(comment_list)
 
 ---
 
-**Version 1.0 | Document Date: 2026-01-15 | Author: AI Assistant**
+**Version 1.7 | Document Date: 2026-06-30**
