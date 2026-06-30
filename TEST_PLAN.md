@@ -31,7 +31,7 @@ We need to make sure the bot works correctly before you start using it. I'll gui
 
 ## TEST 1: LOGIN TEST
 
-**Goal:** Make sure the bot can log in to TikTok
+**Goal:** Make sure the bot requires login before processing targets
 
 ### Steps:
 1. Open `config.yaml` file
@@ -39,18 +39,27 @@ We need to make sure the bot works correctly before you start using it. I'll gui
 3. Save the file
 4. Open Command Prompt/Terminal
 5. Type: `cd Desktop/tiktok_bot` (or wherever your bot is)
-6. Type: `python main.py`
+6. For a **fresh** test, use a new profile: `python main.py --profile logintest`
+7. Or run: `python main.py` (uses default `sessions/chrome`)
 
 ### What Should Happen:
 - [ ] A Chrome browser opens
-- [ ] It goes to TikTok login page
+- [ ] Terminal shows `No auth session found — opening login page...` (new profile)
+- [ ] Browser goes to TikTok **login page** (not a target from `target.txt`)
 - [ ] You log in manually in the browser
-- [ ] You see "✅ Already logged in" or login success in the terminal
+- [ ] Terminal shows `✅ You're logged in!` or `✅ Already logged in from saved session!` (return visit)
+- [ ] **Only then** does the bot navigate to targets in `target.txt`
 
 ### What If It Fails:
+- Bot jumps to a target profile and shows a "Log in" modal → delete the profile folder and retry:
+  ```
+  rmdir /s /q sessions\logintest
+  del data\progress_logintest.json
+  python main.py --profile logintest
+  ```
 - Try logging in manually in the browser first
 - Make sure TikTok isn't blocking you
-- Delete `sessions/chrome` and log in again
+- Delete `sessions/chrome` and log in again (default profile)
 - Try again
 
 ### Stop the Bot:
@@ -58,7 +67,8 @@ We need to make sure the bot works correctly before you start using it. I'll gui
 - The browser will close
 
 ### ✅ Test 1 Passed if:
-- You saw "Login successful!" message
+- Login page appeared before any target profile (new profile)
+- You saw a login success message in the terminal
 - No error messages appeared
 
 ---

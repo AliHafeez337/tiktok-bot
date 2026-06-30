@@ -6,7 +6,8 @@ import os
 import time
 import random
 from modules.browser_setup import get_driver, load_config
-from modules.login import login_tiktok
+from modules.login import login_tiktok, ensure_logged_in
+from modules.login_manual import is_logged_in
 from modules.follower_extractor import (
     extract_followers,
     extract_followers_and_following,
@@ -123,6 +124,10 @@ def process_profile(
     session_remaining=None,
 ):
     """Process a single profile - extract followers and process users"""
+    if not is_logged_in(driver):
+        logger.error("❌ Not logged in — refusing to open target profiles.")
+        return progress, False, 0, False
+
     logger.info(f"\n{'='*50}")
     logger.info(f"📊 Processing profile: @{target_username}")
     logger.info(f"{'='*50}")
@@ -277,6 +282,10 @@ def main():
     try:
         if not login_tiktok(driver, config):
             logger.error("❌ Login failed. Exiting...")
+            return
+
+        if not ensure_logged_in(driver, config):
+            logger.error("❌ Login required before processing targets. Exiting...")
             return
 
         process_all = config['target'].get('process_all', False)

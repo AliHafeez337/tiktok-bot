@@ -38,6 +38,8 @@ python main.py
 
 Each `--profile` gets its own folder under `sessions/` and its own progress file under `data/`. Log in once per profile; the session is reused on later runs.
 
+**Login flow:** On a new profile the bot opens the TikTok login page and waits for you to sign in. It only goes to targets in `target.txt` after auth cookies (`sessionid`, etc.) are detected. It will not open target profiles while logged out.
+
 **Multiple accounts in parallel:**
 ```bash
 # Terminal 1

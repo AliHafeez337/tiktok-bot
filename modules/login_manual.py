@@ -4,45 +4,103 @@ COMPLETELY MANUAL - You login yourself
 """
 
 from selenium.webdriver.common.by import By
-from .utils import setup_logging
+from .utils import setup_logging, dismiss_popups
 import time
 
 logger = setup_logging()
 
+# TikTok sets these only after a real account login (guest browsing does not get them).
+AUTH_COOKIE_NAMES = (
+    'sessionid',
+    'sessionid_ss',
+    'sid_tt',
+    'sid_tt_ss',
+    'uid_tt',
+    'uid_tt_ss',
+)
 
-def _is_logged_in(driver):
-    """Check if the user is logged in."""
-    logged_in_selectors = [
-        '[data-e2e="profile-icon"]',
-        '[data-e2e="nav-profile"]',
-        'a[href*="/@"][data-e2e]',
-    ]
-    for selector in logged_in_selectors:
+LOGGED_OUT_SELECTORS = [
+    '[data-e2e="top-login-button"]',
+    '[data-e2e="nav-login-button"]',
+    'button[data-e2e="nav-login-button"]',
+    '[data-e2e="bottom-login"]',
+]
+
+LOGIN_MODAL_SELECTORS = [
+    '[data-e2e="login-modal"]',
+    '[data-e2e="login-popup"]',
+    'div[role="dialog"] [data-e2e="login-button"]',
+    'div[role="dialog"] button[data-e2e="top-login-button"]',
+]
+
+
+def _element_visible(element):
+    try:
+        return element.is_displayed()
+    except Exception:
+        return False
+
+
+def _any_visible(driver, selectors):
+    for selector in selectors:
         try:
-            if driver.find_elements(By.CSS_SELECTOR, selector):
-                return True
+            for element in driver.find_elements(By.CSS_SELECTOR, selector):
+                if _element_visible(element):
+                    return True
         except Exception:
             pass
+    return False
 
-    try:
-        if driver.find_elements(By.CSS_SELECTOR, '[data-e2e="top-login-button"]'):
-            return False
-    except Exception:
-        pass
 
-    current_url = driver.current_url.lower()
-    if any(part in current_url for part in ("/login", "/signup")):
-        return False
-    if any(part in current_url for part in ("feed", "home", "foryou")):
+def _page_shows_login_modal(driver):
+    if _any_visible(driver, LOGIN_MODAL_SELECTORS):
         return True
 
     try:
-        if driver.find_element(By.XPATH, "//a[contains(@href, '/@')]"):
-            return True
+        for dialog in driver.find_elements(By.CSS_SELECTOR, 'div[role="dialog"]'):
+            if not _element_visible(dialog):
+                continue
+            text = (dialog.text or '').lower()
+            if 'log in' in text or 'sign up' in text:
+                return True
     except Exception:
         pass
 
     return False
+
+
+def _has_auth_cookies(driver):
+    """True only when TikTok auth cookies with a value are present."""
+    try:
+        for cookie in driver.get_cookies():
+            name = cookie.get('name', '')
+            value = (cookie.get('value') or '').strip()
+            if name in AUTH_COOKIE_NAMES and value:
+                return True
+    except Exception:
+        pass
+    return False
+
+
+def is_logged_in(driver):
+    """
+    Require TikTok auth cookies. DOM alone is unreliable because guest pages
+    still show profile links and nav icons.
+    """
+    if not _has_auth_cookies(driver):
+        return False
+
+    current_url = driver.current_url.lower()
+    if any(part in current_url for part in ("/login", "/signup")):
+        return False
+
+    if _any_visible(driver, LOGGED_OUT_SELECTORS):
+        return False
+
+    if _page_shows_login_modal(driver):
+        return False
+
+    return True
 
 
 def manual_login(driver, config):
@@ -68,13 +126,15 @@ def manual_login(driver, config):
 
     logger.info("Checking for saved login session...")
     driver.get("https://www.tiktok.com")
-    time.sleep(2)
+    time.sleep(3)
+    dismiss_popups(driver)
+    time.sleep(1)
 
-    if _is_logged_in(driver):
+    if is_logged_in(driver):
         logger.info("✅ Already logged in from saved session!")
         return True
 
-    logger.info("No saved session found. Opening login page...")
+    logger.info("No auth session found — opening login page...")
     logger.info("YOU need to:")
     logger.info("  1. Enter your email")
     logger.info("  2. Enter your password")
@@ -94,7 +154,7 @@ def manual_login(driver, config):
 
     elapsed = 0
     while elapsed < max_wait:
-        if _is_logged_in(driver):
+        if is_logged_in(driver):
             logger.info(f"✅ You're logged in! (detected after {elapsed}s)")
             return True
 
@@ -102,7 +162,7 @@ def manual_login(driver, config):
         elapsed += poll_interval
 
     logger.info("Checking if you're logged in...")
-    if _is_logged_in(driver):
+    if is_logged_in(driver):
         logger.info("✅ You're logged in!")
         return True
 
@@ -120,17 +180,19 @@ def manual_login(driver, config):
         try:
             user_input = input("👉 Are you logged in? (yes/wait/no): ").strip().lower()
         except Exception:
-            logger.info("Input failed, assuming you're logged in...")
-            return True
+            logger.info("Input failed — checking browser session...")
+            return is_logged_in(driver)
 
         if user_input == "yes":
-            logger.info("✅ Great! Continuing with bot...")
-            return True
+            if is_logged_in(driver):
+                logger.info("✅ Great! Continuing with bot...")
+                return True
+            logger.info("❌ Login not detected yet. Complete login in the browser first.")
         elif user_input == "wait":
             logger.info(f"Waiting another {extra_wait} seconds...")
             wait_elapsed = 0
             while wait_elapsed < extra_wait:
-                if _is_logged_in(driver):
+                if is_logged_in(driver):
                     logger.info("✅ You're logged in! Continuing...")
                     return True
                 time.sleep(poll_interval)

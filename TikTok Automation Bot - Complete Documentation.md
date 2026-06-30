@@ -291,6 +291,15 @@ Log in once per profile in the browser; subsequent runs reuse the saved session.
 - Do **not** start two bots with the same profile at once — Chrome locks the profile folder and the second instance will fail.
 - Profile names: letters, numbers, underscores, hyphens only (e.g. `account1`, `ali_main`).
 
+### Manual login flow
+
+1. Bot opens `https://www.tiktok.com` and checks for **auth cookies** (`sessionid`, `sid_tt`, etc.).
+2. If no auth cookies exist (new profile), it opens the login page and waits for you to sign in manually.
+3. After login is detected, it loads targets from `target.txt` — **never before login**.
+4. On the next run with the same profile, saved cookies in `sessions/<name>/` skip the login step.
+
+Guest browsing on TikTok does **not** set auth cookies, so the bot will not mistake a logged-out session for a logged-in one.
+
 ---
 
 ## 7. DATA FILES
@@ -584,6 +593,8 @@ Backup these files:
 |---------|----------|
 | "WebDriver not found" | Download driver, place in project folder |
 | "Login failed" | Check credentials, try manual login |
+| Bot opens target profile before login | Delete `sessions/<profile>/` and `data/progress_<profile>.json`, run again; ensure terminal shows "No auth session found" |
+| "Log in" modal on target page | Session expired or not logged in — restart bot and complete login when prompted |
 | "Bot is too slow" | Reduce delays slightly |
 | "Missing elements" | Update browser/driver |
 | "Can't find profile" | Check username spelling |
@@ -618,6 +629,7 @@ Backup these files:
 - **v1.5**: Manual login, `target.txt` multi-target queue, follower filter modes
 - **v1.6**: `--profile` CLI for parallel Chrome sessions, per-profile progress files
 - **v1.7**: `max_users_per_session` — cap total scans across all targets per login
+- **v1.8**: Cookie-based login detection — login required before opening targets; fixes false "already logged in" on new profiles
 
 ---
 
