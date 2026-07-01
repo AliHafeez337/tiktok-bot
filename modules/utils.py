@@ -155,6 +155,35 @@ def get_all_targets_from_file(config):
         return targets
     return [config['target']['username']]
 
+
+def parse_targets_string(targets_str):
+    """Parse comma-separated TikTok usernames (optional @ prefix, whitespace allowed)."""
+    if not targets_str or not targets_str.strip():
+        return []
+
+    targets = []
+    for part in targets_str.split(','):
+        username = part.strip().lstrip('@')
+        if username and not username.startswith('#'):
+            targets.append(username)
+    return targets
+
+
+def resolve_targets(config, cli_targets=None):
+    """
+    Resolve the target queue: CLI override first, then target.txt / config defaults.
+    """
+    if cli_targets:
+        parsed = parse_targets_string(cli_targets)
+        if parsed:
+            return parsed, 'cli'
+
+    process_all = config['target'].get('process_all', False)
+    if process_all:
+        return get_all_targets_from_file(config), 'file'
+
+    return [get_target_from_file(config)], 'file'
+
 def check_target_change(current_target, config):
     """
     Check if target has changed in the file

@@ -20,7 +20,7 @@ from modules.action_performer import process_user
 from modules.data_manager import load_progress, save_progress, load_comments, set_profile
 from modules.utils import (
     setup_logging, random_delay, get_timestamp,
-    get_target_from_file, get_all_targets_from_file, check_target_change
+    resolve_targets,
 )
 
 PROFILE_NAME_RE = re.compile(r'^[a-zA-Z0-9_-]+$')
@@ -36,9 +36,11 @@ Examples:
   python main.py --profile account1 # separate Chrome window + saved login
   python main.py -p account2        # run a second instance in another terminal
   python main.py --list-profiles    # show available profiles
+  python main.py -p account1 --targets "user1, user2, user3"
 
 Each --profile gets its own Chrome user-data folder under sessions/.
 Log in once per profile; the session is reused on later runs.
+Use --targets to override target.txt with a comma-separated list.
         """.strip(),
     )
     parser.add_argument(
@@ -50,6 +52,11 @@ Log in once per profile; the session is reused on later runs.
         '--list-profiles',
         action='store_true',
         help='List available session profiles and exit',
+    )
+    parser.add_argument(
+        '-t', '--targets',
+        metavar='USERNAMES',
+        help='Comma-separated TikTok usernames (overrides target.txt when provided)',
     )
     return parser.parse_args()
 
@@ -299,16 +306,16 @@ def main():
             logger.error("❌ Login required before processing targets. Exiting...")
             return
 
-        process_all = config['target'].get('process_all', False)
         max_scrolls = config['target'].get('max_follower_scrolls', 15)
+        targets, target_source = resolve_targets(config, CLI_ARGS.targets)
 
-        if process_all:
-            targets = get_all_targets_from_file(config)
-            logger.info(f"📋 Target queue ({len(targets)}): {', '.join('@' + t for t in targets)}")
+        if target_source == 'cli':
+            logger.info(f"📋 Target queue from --targets ({len(targets)}): {', '.join('@' + t for t in targets)}")
+        elif config['target'].get('process_all', False):
+            logger.info(f"📋 Target queue from {config['target']['dynamic_target_file']} ({len(targets)}): {', '.join('@' + t for t in targets)}")
         else:
-            targets = [get_target_from_file(config)]
-            logger.info(f"🎯 Target: @{targets[0]}")
-            logger.info(f"💡 To change target, edit {config['target']['dynamic_target_file']}")
+            logger.info(f"🎯 Target: @{targets[0]} (from {config['target']['dynamic_target_file']})")
+            logger.info(f"💡 To change target, edit {config['target']['dynamic_target_file']} or use --targets")
 
         comments = load_comments(config['messages']['comments_file'])
         if not comments:
