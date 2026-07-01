@@ -637,6 +637,20 @@ def process_user(driver, username, comments, config):
         logger.info(f"Step 1/3: Commenting on first profile post for @{username}")
         logger.info(f"Target post URL: {latest_post}")
         comment_success = comment_on_post(driver, latest_post, comment_text)
+        if not comment_success:
+            logger.warning(
+                f"Comment failed for @{username} — skipping likes and follow, moving to next follower"
+            )
+            return {
+                'success': False,
+                'username': username,
+                'comment_success': False,
+                'comment_used': None,
+                'likes_done': 0,
+                'followed': False,
+                'reason': 'Comment failed',
+            }
+
         random_delay(
             config['automation'].get('action_delay', 1),
             config['automation'].get('action_delay', 1) + 1,
@@ -657,24 +671,23 @@ def process_user(driver, username, comments, config):
         follow_success = follow_user(driver, username)
 
         all_likes_done = likes_success >= likes_count
-        success = comment_success and all_likes_done
+        success = all_likes_done and follow_success
         if not success:
             logger.warning(
                 f"Partial success for @{username}: "
-                f"comment={'yes' if comment_success else 'no'}, "
+                f"comment=yes, "
                 f"likes={likes_success}/{likes_count}, "
                 f"follow={'yes' if follow_success else 'no'}"
             )
         return {
             'success': success,
             'username': username,
-            'comment_success': comment_success,
-            'comment_used': comment_text if comment_success else None,
+            'comment_success': True,
+            'comment_used': comment_text,
             'likes_done': likes_success,
             'followed': follow_success,
             'reason': None if success else (
-                f"comment={'ok' if comment_success else 'failed'}, "
-                f"likes={likes_success}/{likes_count}"
+                f"comment=ok, likes={likes_success}/{likes_count}"
             ),
         }
 

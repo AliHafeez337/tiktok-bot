@@ -30,7 +30,7 @@ automation:
   #   all - every extracted follower (comment, like 3 posts, follow)
   #   not_followed_by_bot - skip followers the bot already follows
   #   not_followed_by_target - skip followers the target profile already follows back
-  follower_filter: all
+  follower_filter: not_followed_by_bot
   min_delay: 5
   max_delay: 10
   action_delay: 1
