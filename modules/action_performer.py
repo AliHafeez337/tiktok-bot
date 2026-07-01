@@ -499,20 +499,62 @@ def _find_like_button(driver):
         (By.CSS_SELECTOR, 'button[data-e2e="like-icon"]'),
         (By.CSS_SELECTOR, 'button[data-e2e="browse-like-icon"]'),
         (By.CSS_SELECTOR, '[data-e2e="like-icon"]'),
+        (By.CSS_SELECTOR, '[data-e2e="browse-like-icon"]'),
         (By.XPATH, "//button[contains(@aria-label, 'Like')]"),
         (By.XPATH, "//button[contains(@aria-label, 'like video')]"),
     ]
 
     for by, value in like_selectors:
-        like_button = safe_find_clickable(driver, by, value, timeout=5)
-        if like_button:
-            return like_button
+        element = safe_find_clickable(driver, by, value, timeout=5)
+        if not element:
+            continue
+        if element.tag_name.lower() == 'button':
+            return element
+        try:
+            parent_button = element.find_element(By.XPATH, './ancestor::button[1]')
+            if parent_button:
+                return parent_button
+        except Exception:
+            pass
+        return element
     return None
 
 
 def _is_post_liked(like_button):
+    """Detect whether TikTok shows the post as liked."""
     aria_label = (like_button.get_attribute('aria-label') or '').lower()
-    return 'unlike' in aria_label or 'liked' in aria_label
+    aria_pressed = (like_button.get_attribute('aria-pressed') or '').lower()
+    if aria_pressed == 'true':
+        return True
+    if 'unlike' in aria_label:
+        return True
+
+    nodes = [like_button]
+    try:
+        nodes.extend(like_button.find_elements(By.CSS_SELECTOR, 'svg, span, div'))
+    except Exception:
+        pass
+
+    for node in nodes:
+        label = (node.get_attribute('aria-label') or '').lower()
+        if 'unlike' in label or 'remove like' in label:
+            return True
+        if 'liked' in label and 'like video' not in label:
+            return True
+    return False
+
+
+def _poll_post_liked(driver, expected_id, timeout=6):
+    """Wait briefly for a like action to register on the current post."""
+    end = time.time() + timeout
+    while time.time() < end:
+        if _current_page_post_id(driver) != expected_id:
+            return False
+        like_button = _find_like_button(driver)
+        if like_button and _is_post_liked(like_button):
+            return True
+        random_delay(0.4, 0.7)
+    return False
 
 
 def like_post(driver, post_url):
@@ -552,19 +594,18 @@ def like_post(driver, post_url):
             logger.warning("Could not click like button")
             return False
 
-        random_delay(0.8, 1.2)
-
-        if _current_page_post_id(driver) != expected_id:
-            logger.warning(
-                f"Page changed after like click "
-                f"(wanted {expected_id}, now {driver.current_url})"
-            )
-            return False
-
-        refreshed = _find_like_button(driver)
-        if refreshed and _is_post_liked(refreshed):
+        if _poll_post_liked(driver, expected_id):
             logger.info(f"Post liked (verified on post {expected_id})")
             return True
+
+        # Retry once — TikTok sometimes ignores the first click on photo posts.
+        refreshed = _find_like_button(driver)
+        if refreshed and not _is_post_liked(refreshed):
+            safe_click(driver, refreshed)
+            random_delay(0.8, 1.2)
+            if _poll_post_liked(driver, expected_id, timeout=4):
+                logger.info(f"Post liked on retry (verified on post {expected_id})")
+                return True
 
         logger.warning(f"Like click did not register for post {expected_id}")
         return False
@@ -572,6 +613,47 @@ def like_post(driver, post_url):
     except Exception as e:
         logger.error(f"Error liking: {e}")
         return False
+
+
+def _find_follow_button(driver):
+    """Find the profile follow button if the user is not followed yet."""
+    follow_selectors = [
+        (By.CSS_SELECTOR, 'button[data-e2e="follow-button"]'),
+        (By.XPATH, "//button[contains(@data-e2e, 'follow-button')]"),
+        (By.XPATH, "//button[contains(., 'Follow') and not(contains(., 'Following'))]"),
+    ]
+
+    for by, value in follow_selectors:
+        follow_button = safe_find_clickable(driver, by, value, timeout=8)
+        if follow_button:
+            return follow_button
+    return None
+
+
+def _is_user_followed(driver):
+    """Verify the profile shows Following/Friends instead of Follow."""
+    state_selectors = [
+        (By.CSS_SELECTOR, 'button[data-e2e="following-button"]'),
+        (By.XPATH, "//button[contains(@data-e2e, 'following-button')]"),
+        (By.XPATH, "//button[normalize-space()='Following']"),
+        (By.XPATH, "//button[normalize-space()='Friends']"),
+    ]
+
+    for by, value in state_selectors:
+        button = safe_find_element(driver, by, value, timeout=2)
+        if button and button.is_displayed():
+            return True
+
+    follow_button = safe_find_element(
+        driver, By.CSS_SELECTOR, 'button[data-e2e="follow-button"]', timeout=2
+    )
+    if follow_button and follow_button.is_displayed():
+        text = (follow_button.text or '').strip().lower()
+        if 'following' in text or 'friends' in text:
+            return True
+        return False
+
+    return False
 
 
 def follow_user(driver, username):
@@ -582,33 +664,36 @@ def follow_user(driver, username):
         random_delay(2, 3)
         dismiss_popups(driver)
 
-        follow_selectors = [
-            (By.CSS_SELECTOR, 'button[data-e2e="follow-button"]'),
-            (By.XPATH, "//button[contains(@data-e2e, 'follow-button')]"),
-            (By.XPATH, "//button[contains(., 'Follow') and not(contains(., 'Following'))]"),
-        ]
+        if _is_user_followed(driver):
+            logger.info(f"Already following @{username}")
+            return True
 
-        follow_button = None
-        for by, value in follow_selectors:
-            follow_button = safe_find_clickable(driver, by, value, timeout=8)
-            if follow_button:
-                break
-
+        follow_button = _find_follow_button(driver)
         if not follow_button:
             logger.warning("Could not find follow button")
             return False
 
-        button_text = (follow_button.text or '').lower()
-        if 'following' in button_text or 'friends' in button_text:
-            logger.info("Already following this user")
+        if not safe_click(driver, follow_button):
+            logger.warning("Could not click follow button")
+            return False
+
+        random_delay(1.5, 2.5)
+        dismiss_popups(driver)
+
+        if _is_user_followed(driver):
+            logger.info(f"Now following @{username} (verified)")
             return True
 
-        if safe_click(driver, follow_button):
-            random_delay(1, 2)
-            logger.info(f"Now following @{username}")
-            return True
+        # Retry once in case TikTok ignored the first click.
+        follow_button = _find_follow_button(driver)
+        if follow_button and safe_click(driver, follow_button):
+            random_delay(1.5, 2.5)
+            dismiss_popups(driver)
+            if _is_user_followed(driver):
+                logger.info(f"Now following @{username} (verified on retry)")
+                return True
 
-        logger.warning("Could not click follow button")
+        logger.warning(f"Follow click did not register for @{username}")
         return False
 
     except Exception as e:
@@ -670,25 +755,24 @@ def process_user(driver, username, comments, config):
         logger.info(f"Step 3/3: Following @{username}")
         follow_success = follow_user(driver, username)
 
-        all_likes_done = likes_success >= likes_count
-        success = all_likes_done and follow_success
-        if not success:
+        if not follow_success:
+            logger.warning(f"Follow failed for @{username}")
+
+        if likes_success < likes_count:
             logger.warning(
-                f"Partial success for @{username}: "
-                f"comment=yes, "
-                f"likes={likes_success}/{likes_count}, "
-                f"follow={'yes' if follow_success else 'no'}"
+                f"Likes incomplete for @{username}: {likes_success}/{likes_count} "
+                f"(comment ok, follow={'yes' if follow_success else 'no'})"
             )
+
         return {
-            'success': success,
+            'success': True,
             'username': username,
             'comment_success': True,
             'comment_used': comment_text,
             'likes_done': likes_success,
+            'likes_target': likes_count,
             'followed': follow_success,
-            'reason': None if success else (
-                f"comment=ok, likes={likes_success}/{likes_count}"
-            ),
+            'reason': None,
         }
 
     except Exception as e:

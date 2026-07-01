@@ -133,7 +133,7 @@ def process_profile(
     """Process a single profile - extract followers and process users"""
     if not is_logged_in(driver):
         logger.error("❌ Not logged in — refusing to open target profiles.")
-        return progress, False, 0, False
+        return progress, False, 0, False, 0, 0
 
     logger.info(f"\n{'='*50}")
     logger.info(f"📊 Processing profile: @{target_username}")
@@ -167,7 +167,7 @@ def process_profile(
 
     if not followers:
         logger.error(f"❌ Could not extract followers from @{target_username}")
-        return progress, False, 0, False
+        return progress, False, 0, False, 0, 0
 
     progress['total_found'] = len(followers)
 
@@ -189,7 +189,7 @@ def process_profile(
 
     if not users_to_process:
         logger.info("✅ No followers left to process for this profile!")
-        return progress, True, 0, False
+        return progress, True, 0, False, 0, 0
 
     max_comments = config['automation']['max_users_per_run']
     if session_remaining is not None:
@@ -202,6 +202,8 @@ def process_profile(
     )
 
     comments_succeeded = 0
+    skipped_no_posts = 0
+    comment_failures = 0
 
     # Keep trying followers until comment quota is met or queue is exhausted
     for index, username in enumerate(users_to_process, 1):
@@ -221,8 +223,8 @@ def process_profile(
         result = process_user(driver, username, comments, config)
         comment_ok = result.get('comment_success', result.get('comment_used') is not None)
 
-        # Save result
-        if result['success']:
+        # Save result — success is based on comment, not likes/follow
+        if comment_ok:
             progress['processed_users'].append({
                 'username': username,
                 'action': 'processed',
@@ -232,13 +234,17 @@ def process_profile(
                 'followed': result.get('followed', False)
             })
             progress['processed_count'] += 1
-            progress['actions_today'] += 2 + result.get('likes_done', 0)
+            progress['actions_today'] += 1 + result.get('likes_done', 0) + (1 if result.get('followed') else 0)
         else:
             progress['failed_users'].append({
                 'username': username,
                 'reason': result.get('reason', 'Unknown error'),
                 'timestamp': get_timestamp()
             })
+            if result.get('reason') == 'No posts':
+                skipped_no_posts += 1
+            else:
+                comment_failures += 1
 
         if comment_ok:
             comments_succeeded += 1
@@ -269,7 +275,7 @@ def process_profile(
             break
 
     session_limit_hit = session_remaining is not None and session_remaining <= 0
-    return progress, True, comments_succeeded, session_limit_hit
+    return progress, True, comments_succeeded, session_limit_hit, skipped_no_posts, comment_failures
 
 def main():
     # Setup
@@ -324,6 +330,8 @@ def main():
 
         session_max = config['automation'].get('max_users_per_session')
         session_comments = 0
+        session_comment_failures = 0
+        session_skipped_no_posts = 0
         if session_max is not None:
             logger.info(
                 f"⚙️ Session limit: {session_max} successful comments across all targets "
@@ -351,11 +359,13 @@ def main():
             if session_max is not None:
                 session_remaining = session_max - session_comments
 
-            progress, completed, comments_succeeded, session_limit_hit = process_profile(
+            progress, completed, comments_succeeded, session_limit_hit, skipped, failures = process_profile(
                 driver, current_target, config, comments, progress, max_scrolls,
                 session_remaining=session_remaining,
             )
             session_comments += comments_succeeded
+            session_skipped_no_posts += skipped
+            session_comment_failures += failures
 
             if not completed:
                 logger.warning(f"⚠️ Skipping @{current_target} and moving to next target")
@@ -378,8 +388,14 @@ def main():
             logger.info(f"Successful comments this session: {session_comments}")
             if session_max is not None:
                 logger.info(f"Session comment limit: {session_max}")
-            logger.info(f"Failed: {len(progress['failed_users'])}")
-            logger.info(f"Actions today: {progress['actions_today']}")
+            logger.info(f"Skipped (no posts): {session_skipped_no_posts}")
+            logger.info(f"Comment failures: {session_comment_failures}")
+            if progress:
+                logger.info(
+                    f"Last target — processed: {progress['processed_count']}, "
+                    f"failed: {len(progress['failed_users'])}"
+                )
+            logger.info(f"Actions today: {progress['actions_today'] if progress else 0}")
         logger.info("=" * 50)
 
     except KeyboardInterrupt:
