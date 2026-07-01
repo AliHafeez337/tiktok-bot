@@ -8,6 +8,7 @@ venv/
 # Runtime / local state
 sessions/
 data/
+logs/
 *.log
 
 # Secrets
